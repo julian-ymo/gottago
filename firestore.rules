@@ -1,0 +1,34 @@
+rules_version = '2';
+
+// Paste this into Firebase console → Firestore Database → Rules → Publish.
+// Anyone can read. Signed-in (anonymous) phones can add toilets and vote,
+// but each phone can only change its OWN vote, and nobody can delete documents.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /places/{placeId} {
+
+      function onlyMyKey(before, after) {
+        return after.diff(before).affectedKeys().hasOnly([request.auth.uid]);
+      }
+
+      allow read: if true;
+
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['source', 'lat', 'lon', 'name', 'kind', 'fee', 'h24',
+             'wheelchair', 'baby', 'createdBy', 'createdAt', 'confirmVoters', 'removeVoters'])
+        && request.resource.data.source in ['user', 'osm']
+        && request.resource.data.lat is number && request.resource.data.lon is number
+        && request.resource.data.get('name', '') is string
+        && request.resource.data.get('name', '').size() <= 80
+        && request.resource.data.get('confirmVoters', {}).keys().hasOnly([request.auth.uid])
+        && request.resource.data.get('removeVoters', {}).keys().hasOnly([request.auth.uid]);
+
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['confirmVoters', 'removeVoters'])
+        && onlyMyKey(resource.data.get('confirmVoters', {}), request.resource.data.get('confirmVoters', {}))
+        && onlyMyKey(resource.data.get('removeVoters', {}), request.resource.data.get('removeVoters', {}));
+
+      allow delete: if false;
+    }
+  }
+}

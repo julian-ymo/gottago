@@ -1,0 +1,78 @@
+package com.gottago.app
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Bundle
+import android.os.Looper
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
+
+/** Uses Android's own LocationManager (GPS + network), so no Google Play services are needed. */
+object LocationHelper {
+
+    fun hasPermission(ctx: Context): Boolean =
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun providers(lm: LocationManager): List<String> =
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter {
+            runCatching { lm.isProviderEnabled(it) }.getOrDefault(false)
+        }
+
+    @SuppressLint("MissingPermission")
+    suspend fun current(ctx: Context, timeoutMs: Long = 12_000): Location? {
+        if (!hasPermission(ctx)) return null
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val ps = providers(lm)
+        val last = ps.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
+        if (last != null && System.currentTimeMillis() - last.time < 60_000) return last
+        if (ps.isEmpty()) return last
+
+        val fresh = withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine<Location> { cont ->
+                val listener = object : LocationListener {
+                    override fun onLocationChanged(location: Location) {
+                        lm.removeUpdates(this)
+                        if (cont.isActive) cont.resume(location)
+                    }
+                    override fun onProviderEnabled(provider: String) {}
+                    override fun onProviderDisabled(provider: String) {}
+                    @Deprecated("Deprecated in Android")
+                    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                }
+                ps.forEach { lm.requestLocationUpdates(it, 0L, 0f, listener, Looper.getMainLooper()) }
+                cont.invokeOnCancellation { lm.removeUpdates(listener) }
+            }
+        }
+        return fresh ?: last
+    }
+
+    /** Live updates while walking. Call stop() with the returned listener. */
+    @SuppressLint("MissingPermission")
+    fun start(ctx: Context, onUpdate: (Location) -> Unit): LocationListener? {
+        if (!hasPermission(ctx)) return null
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) = onUpdate(location)
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+            @Deprecated("Deprecated in Android")
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        }
+        providers(lm).forEach { lm.requestLocationUpdates(it, 3000L, 3f, listener, Looper.getMainLooper()) }
+        return listener
+    }
+
+    fun stop(ctx: Context, listener: LocationListener?) {
+        if (listener == null) return
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        lm.removeUpdates(listener)
+    }
+}

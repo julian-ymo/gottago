@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+<color name="ink">#0E1624</color><color name="card">#172235</color><color name="line">#2A3850</color>
+<color name="mapbg">#16243A</color><color name="text">#F4F6FA</color><color name="muted">#A9B4C6</color>
+<color name="yellow">#FFD23F</color><color name="green">#3DDC97</color><color name="red">#D63A1E</color>
+<color name="redHeader">#C9341A</color><color name="coral">#FF6B4A</color><color name="blue">#4DA3FF</color>
+</resources>
