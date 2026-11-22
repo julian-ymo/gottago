@@ -21,16 +21,21 @@ object LocationHelper {
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
-    private fun providers(lm: LocationManager): List<String> =
-        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).filter {
-            runCatching { lm.isProviderEnabled(it) }.getOrDefault(false)
-        }
+    private fun hasFine(ctx: Context): Boolean =
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /** GPS needs precise location; with "approximate" only, use the network provider. */
+    private fun providers(ctx: Context, lm: LocationManager): List<String> {
+        val all = if (hasFine(ctx)) listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+        else listOf(LocationManager.NETWORK_PROVIDER)
+        return all.filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
+    }
 
     @SuppressLint("MissingPermission")
     suspend fun current(ctx: Context, timeoutMs: Long = 12_000): Location? {
         if (!hasPermission(ctx)) return null
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        val ps = providers(lm)
+        val ps = providers(ctx, lm)
         val last = ps.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
         if (last != null && System.currentTimeMillis() - last.time < 60_000) return last
         if (ps.isEmpty()) return last
@@ -47,7 +52,9 @@ object LocationHelper {
                     @Deprecated("Deprecated in Android")
                     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
                 }
-                ps.forEach { lm.requestLocationUpdates(it, 0L, 0f, listener, Looper.getMainLooper()) }
+                ps.forEach {
+                    runCatching { lm.requestLocationUpdates(it, 0L, 0f, listener, Looper.getMainLooper()) }
+                }
                 cont.invokeOnCancellation { lm.removeUpdates(listener) }
             }
         }
@@ -66,7 +73,9 @@ object LocationHelper {
             @Deprecated("Deprecated in Android")
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
         }
-        providers(lm).forEach { lm.requestLocationUpdates(it, 3000L, 3f, listener, Looper.getMainLooper()) }
+        providers(ctx, lm).forEach {
+            runCatching { lm.requestLocationUpdates(it, 3000L, 3f, listener, Looper.getMainLooper()) }
+        }
         return listener
     }
 

@@ -3,7 +3,7 @@
 One big **I NEED TO GO** button finds the closest open toilet and walks you there.
 
 ## Features
-- Uses your GPS (no Google Play services needed) and searches OpenStreetMap for toilets within 1 km, widening to 2.5 km and then 5 km if needed.
+- Uses your GPS (no Google Play services needed) and searches OpenStreetMap for toilets within 1.5 km, widening to 5 km if needed.
 - Includes places that usually have toilets (malls, mosques, petrol stations), shown as faded "ask staff" pins.
 - Skips places that are closed right now, using OpenStreetMap opening hours.
 - Emergency mode: big distance and walking time, a walking route on the map, the next turn, **Open in Google Maps** and **Next closest**.

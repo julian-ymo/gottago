@@ -20,7 +20,7 @@ object Repo {
     var toilets: List<Toilet> = emptyList()
         private set
 
-    private val radii = listOf(1000, 2500, 5000)
+    private val radii = listOf(1500, 5000)
 
     fun setUser(lat: Double, lon: Double) {
         userLat = lat; userLon = lon; hasLocation = true
@@ -31,7 +31,12 @@ object Repo {
         setUser(lat, lon)
         var result: List<Toilet> = emptyList()
         for (r in radii) {
-            val osm = Overpass.search(lat, lon, r)
+            val osm = try {
+                Overpass.search(lat, lon, r)
+            } catch (e: Exception) {
+                if (r == radii.first()) throw e // nothing at all: report the error
+                break                           // keep the smaller search's results
+            }
             val community = if (Community.enabled) {
                 runCatching { Community.nearby(lat, lon, r) }.getOrDefault(emptyList())
             } else emptyList()
