@@ -1,5 +1,11 @@
 package com.gottago.app
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.io.IOException
 import java.net.URLEncoder
@@ -8,13 +14,18 @@ import java.net.URLEncoder
 object Overpass {
     private val endpoints = listOf(
         "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter"
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
     )
 
-    fun search(lat: Double, lon: Double, radius: Int): List<Toilet> {
+    /** If a server hasn't answered after this long, also ask the next one; first answer wins. */
+    private const val STAGGER_MS = 2500L
+    private val bg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    suspend fun search(lat: Double, lon: Double, radius: Int): List<Toilet> {
         val a = "(around:$radius,$lat,$lon)"
         val query = """
-            [out:json][timeout:25];
+            [out:json][timeout:15];
             (
               nwr["amenity"="toilets"]$a;
               nwr["toilets"="yes"]$a;
@@ -26,15 +37,27 @@ object Overpass {
         """.trimIndent()
         val body = "data=" + URLEncoder.encode(query, "UTF-8")
 
-        var last: Exception? = null
-        for (endpoint in endpoints) {
-            try {
-                return parse(Http.call("POST", endpoint, body, "application/x-www-form-urlencoded"))
-            } catch (e: Exception) {
-                last = e
+        val answers = Channel<Result<List<Toilet>>>(endpoints.size)
+        // Detached jobs: a slow server's blocking request can't hold up the winner.
+        val jobs = endpoints.mapIndexed { i, endpoint ->
+            bg.launch {
+                delay(i * STAGGER_MS)
+                answers.trySend(runCatching {
+                    parse(Http.call("POST", endpoint, body, "application/x-www-form-urlencoded"))
+                })
             }
         }
-        throw last ?: IOException("Overpass search failed")
+        var last: Throwable? = null
+        try {
+            repeat(endpoints.size) {
+                val r = answers.receive()
+                if (r.isSuccess) return r.getOrThrow()
+                last = r.exceptionOrNull()
+            }
+        } finally {
+            jobs.forEach { it.cancel() }
+        }
+        throw (last ?: IOException("Overpass search failed"))
     }
 
     private fun parse(json: String): List<Toilet> {

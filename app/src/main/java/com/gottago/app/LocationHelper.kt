@@ -31,8 +31,19 @@ object LocationHelper {
         return all.filter { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
     }
 
+    /** Instant: the phone's last known position (no waiting), if not older than maxAgeMs. */
     @SuppressLint("MissingPermission")
-    suspend fun current(ctx: Context, timeoutMs: Long = 12_000): Location? {
+    fun lastKnown(ctx: Context, maxAgeMs: Long = 30 * 60_000L): Location? {
+        if (!hasPermission(ctx)) return null
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val names = mutableListOf(LocationManager.NETWORK_PROVIDER)
+        if (hasFine(ctx)) names += listOf(LocationManager.GPS_PROVIDER, LocationManager.PASSIVE_PROVIDER)
+        val best = names.mapNotNull { runCatching { lm.getLastKnownLocation(it) }.getOrNull() }.maxByOrNull { it.time }
+        return best?.takeIf { System.currentTimeMillis() - it.time <= maxAgeMs }
+    }
+
+    @SuppressLint("MissingPermission")
+    suspend fun current(ctx: Context, timeoutMs: Long = 10_000): Location? {
         if (!hasPermission(ctx)) return null
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         val ps = providers(ctx, lm)

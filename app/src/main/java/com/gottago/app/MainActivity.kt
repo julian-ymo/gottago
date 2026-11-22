@@ -55,8 +55,19 @@ class MainActivity : AppCompatActivity() {
         map.controller.setZoom(16.0)
         map.controller.setCenter(GeoPoint(25.2048, 55.2708))
 
+        // Saved toilets + last known position appear instantly while we search.
+        Repo.load(this)
+        LocationHelper.lastKnown(this)?.let { loc ->
+            Repo.setUser(loc.latitude, loc.longitude)
+            if (Repo.usableFor(loc.latitude, loc.longitude)) render(fit = true)
+            else {
+                showUser()
+                map.controller.setCenter(GeoPoint(loc.latitude, loc.longitude))
+            }
+        }
+
         findViewById<View>(R.id.btnEmergency).setOnClickListener { emergency() }
-        findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener { refresh() }
+        findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener { refresh(force = true) }
         findViewById<ImageButton>(R.id.btnCenter).setOnClickListener {
             if (Repo.hasLocation) {
                 map.controller.setZoom(17.0)
@@ -89,36 +100,74 @@ class MainActivity : AppCompatActivity() {
         map.onPause()
     }
 
-    private fun refresh() {
+    /**
+     * Fast path first: show saved results and search from the phone's last known position
+     * straight away, then refine with a fresh GPS fix in the background.
+     */
+    private fun refresh(force: Boolean = false) {
         if (loading) return
         if (!LocationHelper.hasPermission(this)) {
             permission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
             return
         }
         loading = true
-        tvStatus.text = "Finding your location…"
         lifecycleScope.launch {
+            var shown = Repo.toilets.isNotEmpty() && Repo.hasLocation
             try {
-                val loc = LocationHelper.current(this@MainActivity)
-                if (loc == null) {
-                    tvStatus.text = "Can't get your location. Turn on GPS and tap refresh."
-                    afterLoad = null
+                // 1) instant position (no waiting)
+                val quick = LocationHelper.lastKnown(this@MainActivity)
+                if (quick != null) {
+                    Repo.setUser(quick.latitude, quick.longitude)
+                    showUser()
+                    if (force || !Repo.usableFor(quick.latitude, quick.longitude)) {
+                        if (!shown) tvStatus.text = "Searching for toilets nearby…"
+                        Repo.search(quick.latitude, quick.longitude)
+                    }
+                    render(fit = !shown)
+                    shown = true
+                    runPending()
+                } else if (!shown) {
+                    tvStatus.text = "Finding your location…"
+                }
+
+                // 2) fresh fix; search again only if you moved or the list is old
+                val fresh = LocationHelper.current(this@MainActivity)
+                if (fresh == null) {
+                    if (!shown) tvStatus.text = "Can't get your location. Turn on GPS and tap refresh."
                     return@launch
                 }
-                Repo.setUser(loc.latitude, loc.longitude)
+                Repo.setUser(fresh.latitude, fresh.longitude)
                 showUser()
-                map.controller.animateTo(GeoPoint(loc.latitude, loc.longitude))
-                tvStatus.text = "Searching for toilets nearby…"
-                Repo.search(loc.latitude, loc.longitude)
-                render(fit = true)
-                afterLoad?.invoke()
+                val old = System.currentTimeMillis() - Repo.searchedAt > 10 * 60_000L
+                val searchedNow = quick != null && (force || !Repo.usableFor(quick.latitude, quick.longitude))
+                if (!Repo.usableFor(fresh.latitude, fresh.longitude) || (old && !searchedNow) || (force && quick == null)) {
+                    if (!shown) tvStatus.text = "Searching for toilets nearby…"
+                    Repo.search(fresh.latitude, fresh.longitude)
+                }
+                render(fit = !shown)
+                shown = true
+                runPending()
+                Repo.save(this@MainActivity)
             } catch (e: Exception) {
-                tvStatus.text = "Couldn't load toilets. Check your internet and tap refresh."
+                if (!shown) tvStatus.text = "Couldn't load toilets. Check your internet and tap refresh."
+                else Toast.makeText(this@MainActivity, "Couldn't update – showing saved toilets", Toast.LENGTH_SHORT).show()
+                runPending()
             } finally {
-                afterLoad = null
                 loading = false
+                setFinding(false)
             }
         }
+    }
+
+    private fun runPending() {
+        val p = afterLoad ?: return
+        afterLoad = null
+        setFinding(false)
+        if (Repo.toilets.isNotEmpty()) p()
+    }
+
+    private fun setFinding(on: Boolean) {
+        findViewById<TextView>(R.id.btnEmergency).text = if (on) "FINDING\nTOILET…" else "I NEED\nTO GO"
     }
 
     private fun showUser() {
@@ -160,18 +209,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun emergency() {
-        val stale = System.currentTimeMillis() - Repo.searchedAt > 3 * 60_000
-        if (Repo.toilets.isEmpty() || stale) {
-            Toast.makeText(this, "Finding the closest toilet…", Toast.LENGTH_SHORT).show()
-            afterLoad = { goEmergency() }
-            if (!loading) {
-                val pending = afterLoad
-                refresh()
-                afterLoad = pending
-            }
-        } else {
-            goEmergency()
+        if (Repo.toilets.isNotEmpty() && Repo.hasLocation) {
+            goEmergency() // use what we already have – no waiting
+            return
         }
+        afterLoad = { goEmergency() }
+        setFinding(true)
+        refresh()
     }
 
     private fun goEmergency() {
